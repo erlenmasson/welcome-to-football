@@ -1,6 +1,11 @@
-var map; // Holds the Mapbox map instance.
+/**
+ * Script Purpose: Interactive Map for Grassroots Football Teams
+ * Author: Erlen Masson
+ * Version: 29.1
+ * Last Updated: 4th Feb 2024
+ */
 
-var zoomLevel; // Initial zoom level for the map.
+var map; // Holds the Mapbox map instance.
 var mapModal = document.getElementById("map_modal"); // Modal element for the map.
 var isMarkerClickZoom = false; // Indicates if zooming is triggered by marker click.
 var isResettingView = false; // Flag to indicate when the map view is being reset.
@@ -11,13 +16,15 @@ var currentMarker = null; // Marker for the current team.
 var applyWSLFilter = false; // Flag to apply the WSL teams filter.
 var isCMSLoadComplete = false; // Indicates if CMS content loading is complete.
 var isCMSFilterInitialized = false; // Indicates if CMS filters are initialized.
+var locationData = [];
+var clusterZoom = window.innerWidth < 768 ? 7 : 6;
+var zoomLevel = window.innerWidth < 768 ? 4 : 5.2;
 
-console.log("Script v24 Erlen currently testing");
+console.log("Script v29 | Adding Clusters");
 
 // Resets the map to its initial state.
 function resetMap(showSidebarAfterReset = false) {
   if (map) {
-    console.log("resetMap function called");
     isResettingView = true;
     deselectTeam(); // Deselect any selected team when resetting the map
     map.flyTo({
@@ -39,6 +46,7 @@ function resetMap(showSidebarAfterReset = false) {
   } else {
     console.log("Map not initialized. Unable to reset.");
   }
+  showTeamCapacity(); // Show team capacity when the map is reset
 }
 
 // Clears all active filters.
@@ -49,9 +57,33 @@ function clearAllFilters() {
     clearAllButton.click();
     console.log("Clear all button clicked");
   }
+  showTeamCapacity(); // Show team capacity when all filters are cleared
 }
 
-// Applies the filter for WSL Teams.
+function showTeamCapacity() {
+  const teamCapacity = document.querySelector(".team-capacity");
+  if (teamCapacity) teamCapacity.classList.remove("hide");
+}
+
+function hideTeamCapacity() {
+  const teamCapacity = document.querySelector(".team-capacity");
+  if (teamCapacity) teamCapacity.classList.add("hide");
+}
+
+document.querySelector(".filter-apply").addEventListener("click", function () {
+  // Delay checking for the fs-cmsfilter_active class to ensure it's updated after the filter application
+  setTimeout(() => {
+    const wslFilterActive = document
+      .querySelector(".wsl-label")
+      .classList.contains("fs-cmsfilter_active");
+    if (wslFilterActive) {
+      hideTeamCapacity(); // If WSL filter is active, hide team capacity
+    } else {
+      showTeamCapacity(); // Otherwise, show team capacity
+    }
+  }, 100); // Adjust timeout as needed based on filter application speed
+});
+
 function applyWSLTeamsFilter() {
   var clearAllButton = document.querySelector(".clear-all");
   if (clearAllButton) {
@@ -61,13 +93,14 @@ function applyWSLTeamsFilter() {
   var wslToggleLabel = document.querySelector(".wsl-label");
   if (wslToggleLabel) {
     wslToggleLabel.click();
+    hideTeamCapacity(); // Hide team capacity when WSL filter is applied
   }
 
   var filterApplyButton = document.querySelector(".filter-apply");
   if (filterApplyButton) {
     filterApplyButton.click();
   }
-  console.log("Applied WSL Teams Filter");
+  console.log("WSL Filter Applied");
 }
 
 // Manages the visibility and state of the sidebar.
@@ -97,13 +130,11 @@ function manageSidebar(action) {
     default:
       console.log("Invalid action for manageSidebar function");
   }
-
   adjustMapPadding();
 }
+
 // Event listener for DOMContentLoaded to initialize map-related processes.
 document.addEventListener("DOMContentLoaded", function () {
-  zoomLevel = window.innerWidth < 768 ? 4 : 5.23;
-
   document.querySelectorAll(".open-map").forEach(function (button) {
     button.addEventListener("click", function () {
       if (!isMapInitialized) {
@@ -126,7 +157,6 @@ document.addEventListener("DOMContentLoaded", function () {
         isCMSFilterInitialized
       ) {
         // Apply WSL Teams Filter for .show-wsl-teams buttons
-        console.log("Applying WSL Teams Filter");
         applyWSLTeamsFilter();
       }
     });
@@ -138,6 +168,17 @@ document.addEventListener("DOMContentLoaded", function () {
       resetMap();
     });
   });
+
+  document
+    .querySelectorAll('[fs-cmsfilter-element="tag-text"]')
+    .forEach(function (element) {
+      element.addEventListener("click", function () {
+        if (this.textContent.trim() === "WSL") {
+          console.log("WSL tag clicked, showing team capacity.");
+          showTeamCapacity();
+        }
+      });
+    });
 });
 
 function openTeamInfo(teamSlug) {
@@ -207,7 +248,6 @@ function setupTeamInfo() {
         .closest(".team")
         .getAttribute("data-team-slug");
       closeTeamInfo(teamSlug);
-      console.log(`Team info closed for team slug: ${teamSlug}`);
     });
   });
 }
@@ -215,7 +255,7 @@ function setupTeamInfo() {
 // Initializes the Mapbox map instance.
 function initializeMap() {
   mapboxgl.accessToken =
-    "pk.eyJ1IjoiYW5vbml2YXRlIiwiYSI6ImNsb3lxcncwZTA3ZXIybXA4a2p0ejh3OWcifQ.6BLP6s8rlbP0kgHUtSG1iQ";
+    "pk.eyJ1IjoiYW5vbml2YXRlIiwiYSI6ImNsczRtN3FvcjEzNDYybG1rM2Z5MDZ5MnMifQ.ytdzRNB4lLtvXnjV-_AyTg";
 
   map = new mapboxgl.Map({
     container: "map", // ID of the container element
@@ -239,7 +279,146 @@ function initializeMap() {
     adjustMapPadding(); // Ensure this is called after resizeMap()
   });
 
+  // Attach the setMarkerVisibility function to the zoom event
+  map.on("zoom", setMarkerVisibility);
+
   return map;
+}
+
+// Initializes the map and related processes.
+function initializeMapAndRelatedProcesses() {
+  var map = initializeMap(); // Initialize the Mapbox map
+  adjustMapPadding();
+
+  map.on("load", function () {
+    checkCMSLoadComplete(map, processTeams);
+  });
+}
+
+function setMarkerVisibility() {
+  var currentZoom = map.getZoom();
+  document.querySelectorAll(".marker").forEach(function (markerElement) {
+    if (currentZoom >= clusterZoom) {
+      markerElement.classList.remove("hide"); // Show the marker
+    } else {
+      markerElement.classList.add("hide"); // Hide the marker
+    }
+  });
+}
+
+function addClusters() {
+  var geoJsonData = {
+    type: "FeatureCollection",
+    features: locationData.map(function (location) {
+      return {
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [location.lon, location.lat],
+        },
+      };
+    }),
+  };
+
+  map.addSource("teams", {
+    type: "geojson",
+    data: geoJsonData,
+    cluster: true,
+    clusterMaxZoom: clusterZoom - 1,
+    clusterRadius: 50,
+  });
+
+  map.addLayer({
+    id: "clusters",
+    type: "circle",
+    source: "teams",
+    filter: ["has", "point_count"],
+    paint: {
+      "circle-color": [
+        "step",
+        ["get", "point_count"],
+        "#FCF5E3",
+        10,
+        "#FCF5E3",
+        50,
+        "#FCF5E3",
+      ],
+      "circle-radius": [
+        "step",
+        ["get", "point_count"],
+        20,
+        2,
+        25,
+        10,
+        30,
+        20,
+        35,
+      ],
+    },
+  });
+
+  map.addLayer({
+    id: "cluster-count",
+    type: "symbol",
+    source: "teams",
+    filter: ["has", "point_count"],
+    layout: {
+      "text-field": "{point_count_abbreviated}",
+      "text-font": ["Arial Unicode MS Bold"],
+      "text-size": 12,
+    },
+    paint: {
+      "text-color": "#000000",
+    },
+  });
+
+  // Call the function to handle cluster clicks and cursor updates
+  clusterClick();
+}
+
+function clusterClick() {
+  // Make clusters clickable to zoom in
+  map.on("click", "clusters", function (e) {
+    var features = map.queryRenderedFeatures(e.point, { layers: ["clusters"] });
+    if (!features.length) return;
+
+    var clusterId = features[0].properties.cluster_id;
+    map
+      .getSource("teams")
+      .getClusterExpansionZoom(clusterId, function (err, zoom) {
+        if (err) return;
+
+        isMarkerClickZoom = true; // Set the flag to true before starting the zoom
+
+        map.flyTo({
+          center: features[0].geometry.coordinates,
+          zoom: zoom + 2, // Optionally add more zoom to get closer to the cluster center
+          speed: 0.8,
+          essential: true,
+        });
+
+        // Reset the flag after the map has finished moving
+        map.once("moveend", () => {
+          isMarkerClickZoom = false;
+        });
+      });
+  });
+
+  // Change cursor to pointer when hovering over clusters
+  map.on("mouseenter", "clusters", function () {
+    map.getCanvas().style.cursor = "pointer";
+  });
+  map.on("mouseleave", "clusters", function () {
+    map.getCanvas().style.cursor = "";
+  });
+
+  // Detect zoom on touch devices
+  map.on("touchstart", function () {
+    isTouchZooming = true;
+  });
+  map.on("touchend", function () {
+    isTouchZooming = false;
+  });
 }
 
 // Adjusts the map padding to accommodate the sidebar.
@@ -358,13 +537,6 @@ function resizeMap() {
   }
 }
 
-// Initializes the map and related processes.
-function initializeMapAndRelatedProcesses() {
-  var map = initializeMap(); // Initialize the Mapbox map
-  adjustMapPadding();
-  checkCMSLoadComplete(map, processTeams);
-}
-
 // Checks if the CMS Load is complete.
 function checkCMSLoadComplete(map, processTeamsCallback) {
   console.log("checkCMSLoadComplete function called");
@@ -391,7 +563,6 @@ function checkCMSLoadComplete(map, processTeamsCallback) {
         // Initialize team info interactions after CMS content is fully loaded
         setupTeamInfo(); // Updated to reflect new function name and consolidated logic
 
-        window.fsAttributes.cmsfilter.init(); // Add CMS Filter
         isCMSFilterInitialized = true; // Set flag to indicate CMS Filter is initialized
 
         // Check if WSL filter needs to be applied
@@ -410,51 +581,33 @@ function checkCMSLoadComplete(map, processTeamsCallback) {
   }, 1000); // Check every second
 }
 
-// Function to fetch location data (latitude, longitude, place_name) using Mapbox Geocoding API
-async function fetchLocationData(postcode) {
-  const countryCode = "GB"; // Country code for the United Kingdom
-  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${postcode}.json?country=${countryCode}&access_token=pk.eyJ1IjoiYW5vbml2YXRlIiwiYSI6ImNsb3lxcncwZTA3ZXIybXA4a2p0ejh3OWcifQ.6BLP6s8rlbP0kgHUtSG1iQ`;
-
-  try {
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (data && data.features && data.features.length > 0) {
-      const feature = data.features[0];
-      return {
-        lat: feature.center[1],
-        lon: feature.center[0],
-        placeName: feature.place_name,
-      };
-    } else {
-      console.error(`No location data found for postcode: ${postcode}`);
-      return null;
-    }
-  } catch (error) {
-    console.error("Error fetching location data:", error);
-    return null;
-  }
-}
-
 // Processes team data to create markers and update team information.
 async function processTeams(map) {
   const teams = document.querySelectorAll(".team");
+  const data = document.querySelectorAll(".data-att");
   let processedCount = 0;
+
+  for (var i = 0; i < data.length; i++) {
+    locationData.push({
+      postcode: data[i].dataset.postcode,
+      lat: Number(data[i].dataset.lat),
+      lon: Number(data[i].dataset.lng),
+      placeName: data[i].dataset.team,
+    });
+  }
 
   for (const team of teams) {
     const postcodeElement = team.querySelector(".postcode");
     if (!postcodeElement) continue;
 
-    const postcode = postcodeElement.textContent;
-    const locationData = await fetchLocationData(postcode);
-
     if (locationData) {
-      createMarker(map, team, locationData);
-      updateTeamInfo(team, locationData.placeName);
+      createMarker(map, team, locationData[processedCount]);
+      // updateTeamInfo(team, locationData[processedCount].placeName);
 
-      team.querySelector(".latitude").textContent = locationData.lat.toFixed(5);
+      team.querySelector(".latitude").textContent =
+        locationData[processedCount].lat.toFixed(5);
       team.querySelector(".longitude").textContent =
-        locationData.lon.toFixed(5);
+        locationData[processedCount].lon.toFixed(5);
 
       processedCount++;
       if (processedCount === teams.length) {
@@ -472,7 +625,6 @@ async function processTeams(map) {
             }
           });
         });
-        document.querySelector(".feed-loader").classList.add("teams-loaded");
       }
     } else {
       console.error("Location data not found for team:", team);
@@ -481,6 +633,15 @@ async function processTeams(map) {
 
   console.log(`Total markers created: ${processedCount}`);
   console.log(`Total addresses updated: ${processedCount}`);
+
+  const expectedItemCount = locationData.length;
+
+  if (locationData.length === expectedItemCount) {
+    // Ensure this comparison is meaningful
+    console.log("All teams processed, adding clusters.");
+    addClusters(); // Directly call addClusters here
+    document.querySelector(".feed-loader").classList.add("teams-loaded");
+  }
 }
 
 // Initializes filters for CMS content.
@@ -492,20 +653,18 @@ function initializeCMSFilter() {
 // Creates a marker for a team on the map.
 function createMarker(map, team, locationData) {
   const el = document.createElement("div");
-  el.classList.add("marker");
-  el.setAttribute("data-team-slug", team.getAttribute("data-team-slug"));
+  el.className = "marker";
+  el.setAttribute("data-team-slug", team.dataset.teamSlug); // Ensure your team elements have a data-team-slug attribute
 
+  //console.log(locationData.lon, locationData.lat, locationData.placeName, "passed to marker" );
+
+  // Create a marker and assign it to a variable
   const marker = new mapboxgl.Marker(el)
     .setLngLat([locationData.lon, locationData.lat])
     .addTo(map);
 
-  // Event listener for marker click
   el.addEventListener("click", () => {
     isMarkerClickZoom = true;
-    console.log(
-      "Marker clicked for team:",
-      team.getAttribute("data-team-slug")
-    );
 
     const teamSlug = team.getAttribute("data-team-slug");
     openTeamInfo(teamSlug); // Keep this to open the team info
@@ -518,19 +677,11 @@ function createMarker(map, team, locationData) {
     });
     map.once("moveend", () => {
       isMarkerClickZoom = false;
-      console.log("Moveend event triggered");
     });
   });
 
+  setMarkerVisibility(); // Call this if markers are added dynamically post-initial load
   team.markerInstance = marker;
-}
-
-// Updates team information with data from the location.
-function updateTeamInfo(team, placeName) {
-  const placeParts = placeName.split(", ");
-  team.querySelector(".city").textContent = placeParts[1] || "";
-  team.querySelector(".county").textContent = placeParts[2] || "";
-  team.querySelector(".country").textContent = placeParts[3] || "";
 }
 
 // Throttles calls to adjustMapPadding during window resize events.
